@@ -34,9 +34,30 @@ export function applyDirective(d: UiDirective) {
   }, 650)
 }
 
+/** Resolves when the current turn has finished (events such as a confirmation are queued, never dropped). */
+function waitIdle(timeoutMs = 60_000): Promise<boolean> {
+  if (!useCompass.getState().busy) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const t = setTimeout(() => {
+      unsub()
+      resolve(false)
+    }, timeoutMs)
+    const unsub = useCompass.subscribe((s) => {
+      if (!s.busy) {
+        clearTimeout(t)
+        unsub()
+        resolve(true)
+      }
+    })
+  })
+}
+
 export async function sendToCompass(input: ChatInput, opts: { hidden?: boolean } = {}) {
+  if (useCompass.getState().busy) {
+    if ("message" in input) return // the composer is disabled while busy
+    if (!(await waitIdle())) return
+  }
   const st = useCompass.getState()
-  if (st.busy) return
   const userId = uid()
   const asstId = uid()
   const isMessage = "message" in input
