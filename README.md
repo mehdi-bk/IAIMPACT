@@ -30,19 +30,33 @@ data. On a desktop screen you'll see the phone frame in the centre and the **dem
 on the right. On a phone, open `http://<ip>:3000`; the demo panel is at `/demo` (needs
 `DEMO_ALLOW_LAN=true` from another device).
 
-### API keys
+### API keys — DeepSeek text + OpenAI voice
 
-| Variable | Required for | Notes |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Text assistant (default provider) | Model `claude-opus-5-5` (`ANTHROPIC_MODEL`), effort `low` for chat latency |
-| `OPENAI_API_KEY` | **Voice** (OpenAI Realtime) and/or text fallback | Realtime model `gpt-realtime-2.1` (`OPENAI_REALTIME_MODEL`) |
+Copy `.env.example` to `.env.local` if the local file does not exist, then fill in:
 
-- With only `OPENAI_API_KEY`, text runs on OpenAI (`OPENAI_TEXT_MODEL`, default `gpt-6.1-sol`) and voice works.
-- With only `ANTHROPIC_API_KEY`, text works; voice shows a clear "voix indisponible" fallback.
-- With no key, the banking app works fully; Compass shows a configuration message (it never fakes an answer).
-- API usage is billed by each provider. A Claude subscription does not include API credits.
+```dotenv
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_MODEL=deepseek-flash
+OPENAI_API_KEY=your_openai_project_api_key
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini
+```
 
-The permanent OpenAI key never reaches the browser: the server mints a short-lived Realtime client secret.
+Restart `npm run dev` after changes. No Anthropic key is needed.
+
+- DeepSeek handles text chat, banking tool calls, and intent classification. DeepSeek usage is billed separately from OpenAI: [pricing](https://api-docs.deepseek.com/quick_start/pricing).
+- OpenAI handles voice only in this configuration. Use a permanent server API key,
+  not an expiring Realtime client secret. The server creates client secrets for the browser.
+- The smaller Realtime model is selected to reduce testing costs: [model documentation](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
+- With `LLM_PROVIDER=deepseek`, a missing key or DeepSeek error never switches to paid OpenAI text.
+- DeepSeek replies appear once each model turn completes; tool progress still uses SSE.
+  Native assistant messages and tool-call IDs are retained across turns. DeepSeek runs in non-thinking mode; intent JSON is validated by the engine.
+- Without keys the banking screens still work, but AI features report configuration errors.
+- Optional alternatives remain available: select `LLM_PROVIDER=openai` or
+  `LLM_PROVIDER=anthropic` and supply that provider's key. If `LLM_PROVIDER` is unset,
+  selection prefers DeepSeek, then Gemini, then Anthropic, then OpenAI, based on available keys.
+
+Full setup and acceptance cases: [demo guide](docs/DEMO_GUIDE.md).
 
 ## Scripts
 
@@ -50,7 +64,7 @@ The permanent OpenAI key never reaches the browser: the server mints a short-liv
 |---|---|
 | `npm run dev` | Dev server on :3000 |
 | `npm run build && npm start` | Production build / server (demo panel off unless `DEMO_MODE=true`) |
-| `npm test` | Vitest: policy, authorization, engine, injection, redaction, retrieval (39 tests) |
+| `npm test` | Vitest: policy, authorization, engine, injection, redaction, retrieval (including provider routing and tool-history tests) |
 | `npm run test:e2e` | Playwright mobile E2E (starts its own server on :3100 with `data/e2e.db`). Use `PW_CHROMIUM=/usr/bin/chromium` for a system browser, or `npx playwright install chromium` first. Real-LLM journeys are skipped when no key is configured |
 | `npm run typecheck` / `npm run lint` | TypeScript / ESLint |
 | `npm run db:reset` | Delete the local DB (it re-seeds on the next start). The demo panel's « Tout réinitialiser » does the same without restarting |
@@ -67,7 +81,7 @@ Browser (Next.js app, phone frame)
                       Next.js server (single backend)
       session (httpOnly cookie) → Principal { sessionHash, customerId, channel }
                  │
-      Conversation engine ── LLM provider (Anthropic | OpenAI)
+      Conversation engine ── LLM provider (DeepSeek | Gemini | Anthropic | OpenAI)
                  │                ▲ tool calls
       ONE tool registry (zod-validated, shared by text + voice)
                  │

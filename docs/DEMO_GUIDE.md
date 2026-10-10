@@ -1,10 +1,71 @@
 # Demo guide — exact steps
 
+
+## First setup — DeepSeek text + OpenAI voice
+
+The prepared `.env.local` selects DeepSeek and preserves your OpenAI configuration. Fill in `DEEPSEEK_API_KEY` locally (do not paste
+keys into chat or commit them):
+
+```dotenv
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_MODEL=deepseek-flash
+OPENAI_API_KEY=your_openai_project_api_key
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini
+```
+
+If `.env.local` is missing, copy `.env.example` first. The OpenAI key must be a
+permanent project API key; an expiring Realtime session secret will not work here.
+No Anthropic key is required. Keep `LLM_PROVIDER=deepseek` so text never automatically
+uses OpenAI credits. Intent classification also uses DeepSeek.
+
+From the `IAIMPACT` directory, run `npm run dev`, open <http://localhost:3000>,
+and open `/demo` if the demo panel is hidden on your screen. Restart the server
+whenever you edit `.env.local`.
+
+## Acceptance checklist for this setup
+
+| Case | Steps | Pass condition |
+|---|---|---|
+| DeepSeek connectivity | Click **Tester l'IA** | Result identifies `deepseek / deepseek-flash` and answers OK |
+| OpenAI credentials | Click **Tester la voix** | Ephemeral key obtained for `gpt-realtime-2.1-mini`; this checks credentials, not microphone/audio |
+| Actual voice | Select Camille, open mic, allow microphone, ask « Quel est mon solde ? » | Audible answer, transcript, balance card; end the voice session after the test |
+| Lost card | Run Journey A below in text | Card stays ACTIVE until click, then becomes FROZEN |
+| Dispute | Run Journey B below in text | 89 € operation found, summary reviewed, simulated request stored |
+| Access control | Run Journey C below, in text then voice | Visitor gets no balance; Camille gets 1 245,80 € |
+| Voice confirmation | Restore card, say « Bloque ma carte », then explicitly confirm when prompted | Pending action first; freeze only after confirmation |
+| Voice → text | Return to text after asking for the balance | Transcript remains visible and text follow-up works |
+| Text-only fallback | Temporarily blank OpenAI key and restart | DeepSeek works; voice unavailable with a text alternative |
+| Missing DeepSeek | Temporarily blank DeepSeek key, leave `LLM_PROVIDER=deepseek`, restart | Text configuration error; OpenAI voice remains available, no paid text fallback |
+
+Restore both keys and restart after the missing-key cases. Reset the demo data
+between journeys. DeepSeek balance or rate limits can interrupt repeated multi-turn runs;
+a 402 means check your DeepSeek balance; a 429 means stop and retry after the provider's indicated delay. A 401/403 usually
+requires checking the key, project permissions, or model access. A model-not-found
+error requires selecting an available model through the relevant env variable.
+
+The existing real-model browser tests cover text journeys A/B/C and transaction
+prompt injection. After entering keys, run:
+
+```bash
+npx playwright install chromium  # once, if not installed
+npm run test:e2e -- tests/e2e/assistant.spec.ts
+```
+
+These tests launch a separate server on port 3100 with `data/e2e.db`, read
+`.env.local`, and make real DeepSeek requests. Stop any old test server on port 3100
+before rerunning with changed keys. Browser tests do not validate live microphone
+quality; use the manual voice cases above. They skip if no text provider is configured.
+
+Local verification before key entry: `npm test`, `npm run typecheck`, `npm run lint`.
+The DeepSeek adapter buffers each model turn so tool-call messages can be replayed
+intact; text appears at turn completion rather than token by token.
+
 ## Before going on stage (5 min)
 
 1. `npm run dev` (or `npm run build && DEMO_MODE=true npm start` for the most stable run).
 2. Open `http://localhost:3000` in Chrome, full screen, at least 1440 px wide so the phone and demo panel both show (the left pitch column appears from 1536 px).
-3. In the demo panel, readiness should show **Base ● SQLite**, **IA texte ● claude-opus-5-5** (or your model) and **Voix ● Realtime**.
+3. In the demo panel, readiness should show **Base ● SQLite**, **IA texte ● deepseek-flash** (or your model) and **Voix ● Realtime**.
 4. Click **Tester l'IA**, then **Tester la voix**. Both should show ✓.
 5. Click **Tout réinitialiser**, then select **Camille**.
 6. Allow the microphone for `localhost` once, before the pitch.

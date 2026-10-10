@@ -4,8 +4,8 @@ import OpenAI from "openai"
 
 // ============================================================================
 // Model provider abstraction. The conversation engine only sees this
-// interface; Claude (Anthropic) and OpenAI are interchangeable through env.
-//   LLM_PROVIDER=anthropic|openai (default: anthropic if ANTHROPIC_API_KEY set)
+// interface; DeepSeek, Gemini, Claude (Anthropic) and OpenAI are selectable through env.
+//   LLM_PROVIDER=deepseek|gemini|anthropic|openai (prefers DeepSeek when its key is set)
 // ============================================================================
 
 export interface ToolSpec {
@@ -36,7 +36,7 @@ export interface TurnResult {
 }
 
 export interface LLMProvider {
-  name: "anthropic" | "openai"
+  name: "deepseek" | "gemini" | "anthropic" | "openai"
   model: string
   streamTurn(args: {
     system: string
@@ -54,24 +54,32 @@ export class ProviderUnavailableError extends Error {}
 export function providerStatus() {
   const anthropic = !!process.env.ANTHROPIC_API_KEY
   const openai = !!process.env.OPENAI_API_KEY
-  const chosen = (process.env.LLM_PROVIDER as "anthropic" | "openai" | undefined) ?? (anthropic ? "anthropic" : openai ? "openai" : null)
+  const deepseek = !!process.env.DEEPSEEK_API_KEY
+  const gemini = !!process.env.GEMINI_API_KEY
+  const chosen = process.env.LLM_PROVIDER?.trim() || (deepseek ? "deepseek" : gemini ? "gemini" : anthropic ? "anthropic" : openai ? "openai" : null)
   return {
     anthropic,
     openai,
-    text: chosen && ((chosen === "anthropic" && anthropic) || (chosen === "openai" && openai)) ? chosen : null,
-    textModel: chosen === "openai" ? openaiModel() : anthropicModel(),
+    gemini,
+    deepseek,
+    text: chosen && ((chosen === "deepseek" && deepseek) || (chosen === "gemini" && gemini) || (chosen === "anthropic" && anthropic) || (chosen === "openai" && openai)) ? chosen : null,
+    textModel: chosen === "deepseek" ? deepseekModel() : chosen === "gemini" ? geminiModel() : chosen === "openai" ? openaiModel() : anthropicModel(),
     voice: openai,
   }
 }
 
+const deepseekModel = () => process.env.DEEPSEEK_MODEL || "deepseek-flash"
+const geminiModel = () => process.env.GEMINI_MODEL || "gemini-3.8-flash"
 const anthropicModel = () => process.env.ANTHROPIC_MODEL || "claude-opus-5-5"
 const openaiModel = () => process.env.OPENAI_TEXT_MODEL || "gpt-6.1-sol"
 
 export function getProvider(): LLMProvider {
   const s = providerStatus()
+  if (s.text === "deepseek") return chatProvider("deepseek")
+  if (s.text === "gemini") return chatProvider("gemini")
   if (s.text === "anthropic") return anthropicProvider()
   if (s.text === "openai") return openaiProvider()
-  throw new ProviderUnavailableError("Aucun fournisseur de modèle configuré (ANTHROPIC_API_KEY ou OPENAI_API_KEY).")
+  throw new ProviderUnavailableError("Fournisseur texte indisponible : vérifiez LLM_PROVIDER et sa clé (DEEPSEEK_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY ou OPENAI_API_KEY).")
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +252,84 @@ function openaiProvider(): LLMProvider {
         { signal, timeout: 15_000 },
       )
       return JSON.parse(res.output_text)
+    },
+  }
+}
+
+// OpenAI-compatible endpoints. Keep the complete assistant message so
+// tool-call thought signatures survive persistence and subsequent tool turns.
+function toChatMessages(messages: CanonMessage[], model: string, provider: "gemini" | "deepseek"): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return messages.flatMap((m): OpenAI.Chat.ChatCompletionMessageParam[] => {
+    if (m.role === "user") return [{ role: "user", content: m.content }]
+    if (m.role === "tool") return m.results.map((r) => ({ role: "tool", tool_call_id: r.callId, content: r.content }))
+    if (m.raw?.provider === provider && m.raw.model === model) {
+      return [m.raw.content as OpenAI.Chat.ChatCompletionAssistantMessageParam]
+    }
+    return [{
+      role: "assistant",
+      content: m.text || null,
+      ...(m.toolCalls.length ? { tool_calls: m.toolCalls.map((c) => ({
+        id: c.id, type: "function" as const, function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
+      })) } : {}),
+    }]
+  })
+}
+
+function chatProvider(provider: "gemini" | "deepseek"): LLMProvider {
+  const isDeepSeek = provider === "deepseek"
+  const label = isDeepSeek ? "DeepSeek" : "Gemini"
+  const client = new OpenAI({
+    apiKey: isDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.GEMINI_API_KEY,
+    baseURL: isDeepSeek ? "https://api.deepseek.com" : "https://generativelanguage.googleapis.com/v1beta/openai/",
+    maxRetries: 1,
+    timeout: 60_000,
+  })
+  const model = isDeepSeek ? deepseekModel() : geminiModel()
+  return {
+    name: provider,
+    model,
+    async streamTurn({ system, messages, tools, onText, signal }) {
+      // Buffer each model turn to preserve all native signature metadata.
+      // The engine still emits tool progress and UI events through its SSE stream.
+      const res = await client.chat.completions.create({
+        model,
+        reasoning_effort: isDeepSeek ? "none" : "low",
+        messages: [{ role: "system", content: system }, ...toChatMessages(messages, model, provider)],
+        ...(tools.length ? { tools: tools.map((t) => ({
+          type: "function" as const,
+          function: { name: t.name, description: t.description, parameters: t.parameters },
+        })) } : {}),
+      }, { signal })
+      const choice = res.choices[0]
+      if (!choice || !["stop", "tool_calls"].includes(choice.finish_reason)) {
+        throw new Error(`${label} : réponse incomplète ou bloquée.`)
+      }
+      const message = choice.message
+      const text = message.content ?? ""
+      const toolCalls = (message.tool_calls ?? []).map((call) => {
+        if (call.type !== "function") throw new Error(`${label} : type d'outil inattendu.`)
+        let args: unknown
+        try { args = JSON.parse(call.function.arguments || "{}") }
+        catch { args = { __invalid_json: call.function.arguments } }
+        return { id: call.id, name: call.function.name, args }
+      })
+      if (!text && !toolCalls.length) throw new Error(`${label} : réponse vide.`)
+      if (text) onText(text)
+      return { text, toolCalls, raw: { provider, model, content: message }, stopReason: toolCalls.length ? "tool_use" : "end_turn" }
+    },
+    async classify({ system, input, schema, signal }) {
+      const res = await client.chat.completions.create({
+        model: (isDeepSeek ? process.env.DEEPSEEK_CLASSIFIER_MODEL : process.env.GEMINI_CLASSIFIER_MODEL) || model,
+        reasoning_effort: isDeepSeek ? "none" : "low",
+        messages: [{ role: "system", content: isDeepSeek
+          ? `${system}\nReturn only a JSON object matching this JSON schema: ${JSON.stringify(schema)}`
+          : system }, { role: "user", content: input }],
+        max_tokens: 1024,
+        response_format: isDeepSeek ? { type: "json_object" } : { type: "json_schema", json_schema: { name: "intent", schema } },
+      }, { signal, timeout: 15_000 })
+      const choice = res.choices[0]
+      if (choice?.finish_reason !== "stop" || !choice.message.content) throw new Error(`${label} : classification incomplète.`)
+      return JSON.parse(choice.message.content)
     },
   }
 }
