@@ -6,7 +6,7 @@ import { aiConfigured, ask, money, openCompass, resetAndLogin, waitAnswer } from
 
 test.describe("Compass journeys (real LLM)", () => {
   test.beforeEach(async ({ page }) => {
-    test.skip(!(await aiConfigured(page)), "No LLM provider configured (ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+    test.skip(!(await aiConfigured(page)), "No LLM provider configured (DEEPSEEK_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY or OPENAI_API_KEY)")
   })
 
   test("Journey A — lost card: options, confirmation, real state change", async ({ page }) => {

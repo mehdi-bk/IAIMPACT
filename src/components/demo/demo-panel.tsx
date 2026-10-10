@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils"
 
 interface DemoState {
   session: SessionInfo
-  providers: { anthropic: boolean; openai: boolean; text: string | null; textModel: string; voice: boolean }
+  providers: { deepseek: boolean; gemini: boolean; anthropic: boolean; openai: boolean; text: string | null; textModel: string; voice: boolean }
   workflow: { intent: string; stage: string; missingInformation: string[]; pendingActionId: string | null } | null
   state: { camilleCard: string; submittedHandoffs: number }
   trace: { id: number; at: string; channel: string; kind: string; name: string; decision: string; detail: string }[]
